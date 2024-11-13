@@ -145,8 +145,6 @@ end
 
 The always operators are executed continuously during simulation every time at least one of its sensitivity list arguments changes to 1 (true). Input signal names are separated by the keyword or or the symbol , . I used ```or```, and the sensitivity list is what’s in parentheses. The essence of always is that processing does not occur sequentially like it typically does in loops in C++, but continuously – as long as the simulation is running.
 
-## У работы фул балл
-
 ## Инструментарий
 Icarus Verilog version 11.0, logisim-evolution-3.8.0
 
