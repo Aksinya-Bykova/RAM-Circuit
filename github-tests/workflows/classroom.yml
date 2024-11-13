@@ -1,0 +1,235 @@
+name: CI/CD
+
+on:
+  create:
+  repository_dispatch:
+  workflow_dispatch:  
+    inputs:
+
+      structural:
+        description: "Test stack_structural?"
+        default: true
+        type: boolean
+        
+      behaviour:
+        description: "Test stack_behaviour?"
+        default: true
+        type: boolean
+
+defaults:
+  run:
+    shell: pwsh
+    
+jobs:
+  buildtest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: params
+        id: params
+        run: |  
+          $smode = if (Test-Path -Path "stack_structural.sv" -PathType leaf )
+          {
+            if ((Select-String -Path "stack_structural.sv" -Pattern "stack_structural_normal").Matches.Success) {"normal"} else {"lite"}
+          } else { "none" }
+          $bmode = if (Test-Path -Path "stack_behaviour.sv" -PathType leaf )
+          {
+            if ((Select-String -Path "stack_behaviour.sv" -Pattern "stack_behaviour_normal").Matches.Success) {"normal"} else {"lite"}
+          } else { "none" }
+
+          echo $smode
+          echo $bmode
+
+          echo "smode=$($smode)" >> $env:GITHUB_OUTPUT 
+          echo "bmode=$($bmode)" >> $env:GITHUB_OUTPUT
+
+          echo "# Parameters" >> $env:GITHUB_STEP_SUMMARY
+          echo "stack_structural: $${{ inputs.structural }}`t detect : $($smode)" >> $env:GITHUB_STEP_SUMMARY
+          echo "stack_behaviour: $${{ inputs.behaviour }}`t detect : $($bmode)" >> $env:GITHUB_STEP_SUMMARY
+
+          
+      - name: install_deps
+        id: install_deps
+        if: inputs.structural || inputs.behaviour
+        run: |  
+          cd .github/workflows/   
+          sudo dpkg -i iverilog_12.0-2_amd64.deb
+          $version = $(iverilog -v) -join "`n"
+          
+          $ErrorActionPreference = 'SilentlyContinue'
+          echo "# iverilog" >> $env:GITHUB_STEP_SUMMARY      
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            "$version">> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY            
+          echo $version
+          exit(0)
+          
+      - name: build_structural
+        id: build_structural
+        if: inputs.structural && (steps.params.outputs.smode != 'none')
+        run: |  
+          echo "# build_structural" >> $env:GITHUB_STEP_SUMMARY     
+          try {
+            $ErrorActionPreference = 'SilentlyContinue'
+            pwsh -Command { iverilog -g2012 -o stack_structural_tb.out stack_structural_${{steps.params.outputs.smode}}_tb.sv *>&1 > log.txt }       
+          } catch {
+            Write-Output "❌ build failed!"
+          } 
+          
+          $bec = $LastExitCode
+          echo "bec=$($bec)" >> $env:GITHUB_OUTPUT  
+          echo "build_structural exit code: $($bec)">> $env:GITHUB_STEP_SUMMARY 
+          
+          $log="$(Get-Content log.txt -Raw)"
+          echo "blog=$($log)" >> $env:GITHUB_OUTPUT 
+          echo "More information in SUMMARY!"
+          echo "build_structural build log:">> $env:GITHUB_STEP_SUMMARY         
+            echo '```' >> $env:GITHUB_STEP_SUMMARY        
+            "$log" >> $env:GITHUB_STEP_SUMMARY        
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+          exit(0)
+                 
+      - name: build_behaviour
+        id: build_behaviour
+        if: inputs.behaviour && (steps.params.outputs.bmode != 'none')
+        run: |  
+          echo "# build_behaviour" >> $env:GITHUB_STEP_SUMMARY  
+          try {
+            $ErrorActionPreference = 'SilentlyContinue'
+            pwsh -Command { iverilog -g2012 -o stack_behaviour_tb.out stack_behaviour_${{steps.params.outputs.bmode}}_tb.sv *>&1 > log.txt } 
+          } catch {
+            Write-Output "❌ build failed!"
+          } 
+          
+          $bec = $LastExitCode
+          echo "bec=$($bec)" >> $env:GITHUB_OUTPUT  
+          echo "build_behaviour exit code: $($bec)">> $env:GITHUB_STEP_SUMMARY 
+
+          $log=Get-Content log.txt -Raw
+          echo "blog=$($log)" >> $env:GITHUB_OUTPUT 
+          echo "More information in SUMMARY!"
+          echo "build_structural build log:">> $env:GITHUB_STEP_SUMMARY         
+            echo '```' >> $env:GITHUB_STEP_SUMMARY      
+            "$log" >> $env:GITHUB_STEP_SUMMARY          
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+          exit(0)
+                      
+      - name: test_structural
+        id: test_structural
+        if: inputs.structural && (steps.params.outputs.smode != 'none') && (steps.build_structural.outputs.bec==0)
+        run: |  
+          $ErrorActionPreference = 'SilentlyContinue'
+          echo "# test_structural" >> $env:GITHUB_STEP_SUMMARY  
+          
+          vvp stack_structural_tb.out +TIMES=5 +OUTCSV=st_structural_5.csv > "stdout.log"
+          echo "More information in SUMMARY!"
+          echo "<details><summary>vvp test_structural test log:</summary>`n" >> $env:GITHUB_STEP_SUMMARY    
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            Get-Content "stdout.log" -Raw >> $env:GITHUB_STEP_SUMMARY           
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            echo "`n</details>`n`n" >> $env:GITHUB_STEP_SUMMARY  
+
+          cd .github/workflows/
+          python "verilog_checker.py" "ref_stack_${{steps.params.outputs.smode}}_5.csv" "../../st_structural_5.csv" > "stdout.log"
+          $verdict = $LastExitCode
+          echo "verdict=$($verdict)" >> $env:GITHUB_OUTPUT  
+          $log = Get-Content "stdout.log" -Raw
+
+          echo "More information in SUMMARY!" 
+          echo "<details><summary>test_structural test log:</summary>`n" >> $env:GITHUB_STEP_SUMMARY      
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            "$log" >> $env:GITHUB_STEP_SUMMARY           
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            echo "`n</details>`n`n" >> $env:GITHUB_STEP_SUMMARY  
+
+          if ($verdict -eq 0) 
+          {         
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            "Result:✅ PASSED`n" >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY 
+          }
+          else
+          {
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            "Result:❌ FAILED`n$verdict" >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY 
+          }  
+          exit(0)
+          
+      - name: test_behaviour
+        id: test_behaviour
+        if: inputs.behaviour && (steps.params.outputs.bmode != 'none') && (steps.build_behaviour.outputs.bec==0)
+        run: |  
+          $ErrorActionPreference = 'SilentlyContinue'
+          echo "# test_behaviour" >> $env:GITHUB_STEP_SUMMARY  
+          
+          vvp stack_behaviour_tb.out +TIMES=5 +OUTCSV=st_behaviour_5.csv > "stdout.log"
+          echo "More information in SUMMARY!"
+          echo "<details><summary>vvp test_behaviour test log:</summary>`n" >> $env:GITHUB_STEP_SUMMARY    
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            Get-Content "stdout.log" -Raw >> $env:GITHUB_STEP_SUMMARY           
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            echo "`n</details>`n`n" >> $env:GITHUB_STEP_SUMMARY  
+
+          cd .github/workflows/
+          python "verilog_checker.py" "ref_stack_${{steps.params.outputs.bmode}}_5.csv" "../../st_behaviour_5.csv" > "stdout.log"
+          $verdict = $LastExitCode
+          echo "verdict=$($verdict)" >> $env:GITHUB_OUTPUT 
+          $log = Get-Content "stdout.log" -Raw
+
+          echo "More information in SUMMARY!"
+          echo "<details><summary>test_behaviour test log:</summary>`n" >> $env:GITHUB_STEP_SUMMARY    
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            "$log" >> $env:GITHUB_STEP_SUMMARY           
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            echo "`n</details>`n`n" >> $env:GITHUB_STEP_SUMMARY  
+
+          if ($verdict -eq 0) 
+          {         
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            "Result:✅ PASSED`n" >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY 
+          }
+          else
+          {
+            echo '```' >> $env:GITHUB_STEP_SUMMARY     
+            "Result:❌ FAILED`n$verdict" >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY 
+          }  
+          exit(0)     
+          
+      - name: summary
+        id: summary
+        if: ${{ always() }}
+        run: |
+          echo "${{ toJson(steps) }}"
+          
+          echo "# Summary" >> $env:GITHUB_STEP_SUMMARY
+          echo "stack_structural : $${{ inputs.structural }}`t detect : ${{steps.params.outputs.smode}}" >> $env:GITHUB_STEP_SUMMARY
+          echo "stack_behaviour  : $${{ inputs.behaviour }}`t detect : ${{steps.params.outputs.bmode}}"  >> $env:GITHUB_STEP_SUMMARY
+
+            $build_structural_total = if ($${{ steps.build_structural.conclusion == 'success' }} -and "${{steps.build_structural.outputs.bec}}" -eq "0") { "✅ success" } else { if ($${{ steps.build_structural.conclusion == 'skipped' }}) { "🔷 skipped" } else { "❌ failure" } }
+          echo "build_structural : $($build_structural_total)"
+          echo "build_structural : $($build_structural_total)" >> $env:GITHUB_STEP_SUMMARY
+
+          
+            $build_behaviour_total = if ($${{ steps.build_behaviour.conclusion == 'success' }} -and "${{steps.build_behaviour.outputs.bec}}" -eq "0") { "✅ success" } else { if ($${{ steps.build_behaviour.conclusion == 'skipped' }}) { "🔷 skipped" } else { "❌ failure" } }
+          echo "build_behaviour  : $($build_behaviour_total)"
+          echo "build_behaviour  : $($build_behaviour_total)" >> $env:GITHUB_STEP_SUMMARY
+
+            $test_structural_total = if ($${{ steps.test_structural.conclusion == 'success' }} -and "${{steps.test_structural.outputs.verdict}}" -eq "0") { "✅ success" } else { if ($${{ steps.test_structural.conclusion == 'skipped' }}) { "🔷 skipped" } else { "❌ failure" } }
+          echo "test_structural : $($test_structural_total)"
+          echo "test_structural : $($test_structural_total)" >> $env:GITHUB_STEP_SUMMARY
+          
+            $test_behaviour_total = if ($${{ steps.test_behaviour.conclusion == 'success' }} -and "${{steps.test_behaviour.outputs.verdict}}" -eq "0") { "✅ success" } else { if ($${{ steps.test_behaviour.conclusion == 'skipped' }}) { "🔷 skipped" } else { "❌ failure" } }
+          echo "test_behaviour  : $($test_behaviour_total)"
+          echo "test_behaviour  : $($test_behaviour_total)" >> $env:GITHUB_STEP_SUMMARY
+          
+          $passed = $build_structural_total -ne "❌ failure" -and $build_behaviour_total -ne "❌ failure" -and $test_structural_total -ne "❌ failure" -and $test_behaviour_total -ne "❌ failure"
+          $skipped = $build_structural_total -eq "🔷 skipped" -and $build_behaviour_total -eq "🔷 skipped" -and $test_structural_total -eq "🔷 skipped" -and $test_behaviour_total -eq "🔷 skipped"
+          echo "TOTAL        : $(if ($skipped) { "🔷 skipped" } else { if ($passed) {"✅ success"} else {"❌ failure" }})" >> $env:GITHUB_STEP_SUMMARY
+          echo "TOTAL        : $(if ($skipped) { "🔷 skipped" } else { if ($passed) {"✅ success"} else {"❌ failure" }})"
+          exit($skipped + -not $passed)
