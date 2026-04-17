@@ -1,9 +1,6 @@
 ## Toolkit
 Icarus Verilog version 11.0, logisim-evolution-3.8.0
 
-## Variant
-Logisim normal, structural Verilog normal, behavioral Verilog normal
-
 # Description
 ## Task and Input Processing Description
 You need to model a stack with 5 cells in Logisim and Verilog in two variants: structural and behavioral. The stack is controlled by the commands nop, push, pop.
